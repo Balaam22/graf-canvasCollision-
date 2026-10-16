@@ -1,131 +1,188 @@
 const canvas = document.getElementById("canvas");
 let ctx = canvas.getContext("2d");
 
-// Obtiene las dimensiones de la pantalla actual
+// Dimensiones del canvas
 const window_height = window.innerHeight;
 const window_width = window.innerWidth;
 canvas.height = window_height;
 canvas.width = window_width;
-canvas.style.background = "#ff8";
 
-class Circle {
-    constructor(x, y, radius, color, text, speed) {
-        this.posX = x;
-        this.posY = y;
-        this.radius = radius;
-        this.color = color;
-        this.originalColor = color; // Guardamos el color original para el efecto de flash
-        this.text = text;
-        this.speed = speed;
-        // Asignamos dirección aleatoria inicial en X y Y
-        this.dx = (Math.random() < 0.5 ? 1 : -1) * this.speed;
-        this.dy = (Math.random() < 0.5 ? 1 : -1) * this.speed;
+// 1. Cargar la imagen de fondo bugatti.jpg
+let bgImage = new Image();
+bgImage.src = 'bugatti.jpg';
+let imageLoaded = false;
+
+bgImage.onload = function() {
+    imageLoaded = true;
+};
+
+// Función para dibujar el fondo (imagen o respaldo con color si aún no carga)
+function drawBackground() {
+    if (imageLoaded) {
+        ctx.drawImage(bgImage, 0, 0, window_width, window_height);
+    } else {
+        ctx.fillStyle = "#222222";
+        ctx.fillRect(0, 0, window_width, window_height);
+    }
+}
+
+// Variables globales del juego
+let score = 0; // Contador de objetos eliminados
+
+// Clase Triangle (Triángulo interactivo con caída libre, rebote y rotación)
+class Triangle {
+    constructor(size, initialSpawn = false) {
+        this.size = size;
+        this.radius = size; // Radio para detección de colisión con clic del mouse
+        this.resetPosition(initialSpawn);
+        
+        // Color aleatorio vibrante para el triángulo
+        this.color = `hsl(${Math.random() * 360}, 85%, 55%)`;
+        this.angle = Math.random() * Math.PI * 2; // Ángulo inicial de rotación
+        this.rotationSpeed = (Math.random() - 0.5) * 0.05; // Velocidad de giro
     }
 
-    draw(context) {
-        context.beginPath();
-        context.strokeStyle = this.color;
-        context.textAlign = "center";
-        context.textBaseline = "middle";
-        context.font = "20px Arial";
-        context.fillText(this.text, this.posX, this.posY);
-        context.lineWidth = 2;
-        context.arc(this.posX, this.posY, this.radius, 0, Math.PI * 2, false);
-        context.stroke();
-        context.closePath();
-    }
-
-    update(context) {
-        // Actualizar la posición X
-        this.posX += this.dx;
-        if (this.posX + this.radius > window_width || this.posX - this.radius < 0) {
-            this.dx = -this.dx;
+    // Reiniciar posición en la parte superior con distribución en altura
+    resetPosition(initialSpawn = false) {
+        this.posX = Math.random() * (window_width - this.size * 2) + this.size;
+        
+        // Si es el inicio del juego, se distribuyen en una franja amplia arriba para evitar espacios en blanco
+        if (initialSpawn) {
+            this.posY = -Math.random() * window_height - this.size;
+        } else {
+            this.posY = -this.size - Math.random() * 150;
         }
 
-        // Actualizar la posición Y
-        this.posY += this.dy;
-        if (this.posY + this.radius > window_height || this.posY - this.radius < 0) {
-            this.dy = -this.dy;
+        this.vx = (Math.random() - 0.5) * 2; // Ligera deriva horizontal
+        this.vy = Math.random() * 2; // Velocidad inicial vertical
+        this.bounceFactor = 0.68; // Factor de rebote (pérdida de energía)
+    }
+
+    // Dibujar el triángulo
+    draw(context) {
+        context.save();
+        context.translate(this.posX, this.posY);
+        context.rotate(this.angle);
+
+        context.beginPath();
+        // Vértices de un triángulo equilátero respecto al centro
+        context.moveTo(0, -this.size);
+        context.lineTo(this.size * 0.866, this.size * 0.5);
+        context.lineTo(-this.size * 0.866, this.size * 0.5);
+        context.closePath();
+
+        context.fillStyle = this.color;
+        context.fill();
+
+        context.lineWidth = 2;
+        context.strokeStyle = "#ffffff";
+        context.stroke();
+
+        context.restore();
+    }
+
+    // Actualizar física (Caída libre y rebote en parábola)
+    update(context, gravity) {
+        // Aplicar gravedad y rotación
+        this.vy += gravity;
+        this.angle += this.rotationSpeed;
+
+        // Actualizar posiciones
+        this.posX += this.vx;
+        this.posY += this.vy;
+
+        // Rebote en bordes laterales
+        if (this.posX + this.size > window_width || this.posX - this.size < 0) {
+            this.vx = -this.vx;
+        }
+
+        // Rebote en el suelo (borde inferior)
+        if (this.posY + this.size >= window_height) {
+            this.posY = window_height - this.size; // Ajuste de posición
+            this.vy = -this.vy * this.bounceFactor; // Invertir dirección y amortiguar
+            this.vx *= 0.95; // Fricción horizontal en el suelo
+
+            // Si perdió la energía suficiente tras rebotar, reaparece arriba
+            if (Math.abs(this.vy) < 1.5) {
+                this.resetPosition(false);
+            }
         }
 
         this.draw(context);
-        
-        // Regresamos al color original para el siguiente frame (el flash dura solo el impacto)
-        this.color = this.originalColor;
+    }
+
+    // Comprobar clic del ratón dentro del radio del triángulo
+    isClicked(mouseX, mouseY) {
+        let dx = mouseX - this.posX;
+        let dy = mouseY - this.posY;
+        let distance = Math.sqrt(dx * dx + dy * dy);
+        return distance <= this.radius;
     }
 }
 
-// Crear un array para almacenar N círculos
-let circles = [];
-
-// Función para generar círculos aleatorios
-function generateCircles(n) {
+// Crear arreglo de 25 triángulos[cite: 9]
+let triangles = [];
+function initTriangles(n) {
+    triangles = [];
     for (let i = 0; i < n; i++) {
-        let radius = Math.random() * 30 + 20; // Radio entre 20 y 50
-        let x = Math.random() * (window_width - radius * 2) + radius;
-        let y = Math.random() * (window_height - radius * 2) + radius;
-        let color = `#${Math.floor(Math.random() * 16777215).toString(16)}`; // Color aleatorio
-        let speed = Math.random() * 4 + 1; // Velocidad entre 1 y 5 unidades
-        let text = `C${i + 1}`; // Etiqueta del círculo
-        circles.push(new Circle(x, y, radius, color, text, speed));
+        let size = Math.random() * 12 + 20; // Tamaño entre 20 y 32
+        triangles.push(new Triangle(size, true));
     }
 }
 
-// Función para detectar colisiones, aplicar rebote y efecto de flash azul
-function checkCollisions() {
-    for (let i = 0; i < circles.length; i++) {
-        for (let j = i + 1; j < circles.length; j++) {
-            let c1 = circles[i];
-            let c2 = circles[j];
+// Dibujar marcador de eliminaciones en la esquina superior derecha[cite: 9]
+function drawScore() {
+    ctx.fillStyle = "#ffffff"; // Color blanco para destacar sobre la imagen de fondo
+    ctx.font = "bold 22px Arial";
+    ctx.textAlign = "right";
+    ctx.shadowColor = "rgba(0, 0, 0, 0.8)"; // Sombra para mejor legibilidad
+    ctx.shadowBlur = 6;
+    ctx.fillText(`Eliminadas: ${score}`, window_width - 30, 40);
+    ctx.shadowBlur = 0; // Limpiar sombra
+}
 
-            // Distancia entre los centros (Fórmula del inciso A)[cite: 2, 4]
-            let dx = c2.posX - c1.posX;
-            let dy = c2.posY - c1.posY;
-            let distance = Math.sqrt(dx * dx + dy * dy);
+// Ajustar gravedad según el marcador de eliminados (Reglas de velocidad)[cite: 9]
+function getGravity() {
+    if (score > 20) {
+        return 0.5; // Velocidad alta (Contador > 20)[cite: 9]
+    } else if (score > 10) {
+        return 0.35; // Velocidad media (Contador > 10)[cite: 9]
+    }
+    return 0.2; // Velocidad inicial predefinida[cite: 9]
+}
 
-            // Si hay colisión
-            if (distance < c1.radius + c2.radius) {
-                // 1. Efecto de "flash" en color azul (#0000FF)[cite: 4]
-                c1.color = "#0000FF";
-                c2.color = "#0000FF";
+// Evento de clic con el mouse para eliminar objetos y sumarlos al contador[cite: 8, 9]
+canvas.addEventListener("click", function (event) {
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = event.clientX - rect.left;
+    const mouseY = event.clientY - rect.top;
 
-                // 2. Rebote en dirección contraria (intercambio de velocidades)[cite: 4]
-                let tempDx = c1.dx;
-                let tempDy = c1.dy;
-                c1.dx = c2.dx;
-                c1.dy = c2.dy;
-                c2.dx = tempDx;
-                c2.dy = tempDy;
-
-                // 3. Corrección de superposición para evitar que se queden pegados
-                let overlap = (c1.radius + c2.radius) - distance;
-                let nx = dx / distance;
-                let ny = dy / distance;
-                
-                c1.posX -= nx * overlap * 0.5;
-                c1.posY -= ny * overlap * 0.5;
-                c2.posX += nx * overlap * 0.5;
-                c2.posY += ny * overlap * 0.5;
-            }
+    // Detectar clic en el triángulo más cercano/superior
+    for (let i = triangles.length - 1; i >= 0; i--) {
+        if (triangles[i].isClicked(mouseX, mouseY)) {
+            score++; // Incrementar marcador[cite: 9]
+            triangles[i].resetPosition(false); // Vuelve a subir para caer inmediatamente
+            break; // Eliminar solo un triángulo por clic
         }
     }
-}
+});
 
-// Función para animar los círculos
+// Bucle de animación
 function animate() {
-    ctx.clearRect(0, 0, window_width, window_height); // Limpiar el canvas
+    drawBackground();
 
-    // Primero verificamos colisiones (cambia el color a azul y ajusta vectores)
-    checkCollisions();
+    let currentGravity = getGravity();
 
-    // Después actualizamos y dibujamos cada círculo
-    circles.forEach(circle => {
-        circle.update(ctx); 
+    // Actualizar y dibujar cada triángulo
+    triangles.forEach(triangle => {
+        triangle.update(ctx, currentGravity);
     });
 
-    requestAnimationFrame(animate); // Repetir la animación
+    drawScore();
+
+    requestAnimationFrame(animate);
 }
 
-// Generar 20 círculos y comenzar la animación[cite: 4]
-generateCircles(20); 
+// Inicializar 25 triángulos y comenzar la animación[cite: 9]
+initTriangles(25);
 animate();
